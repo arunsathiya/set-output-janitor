@@ -32,6 +32,17 @@ func main() {
 				fmt.Println("Error cloning repository:", err)
 				return
 			}
+
+			// Check for ::set-output in cloned directory
+			fmt.Println("Checking for ::set-output in", repoDir)
+			grepCmd := "grep -rnw '" + repoDir + "' -e '::set-output'"
+			grep := exec.Command("bash", "-c", grepCmd)
+			output, err := grep.Output()
+			if err != nil {
+				fmt.Println("::set-output not found or error in grep:", err)
+				return
+			}
+			fmt.Printf("::set-output found in %s:\n%s\n", repoDir, output)
 		}(scanner.Text())
 	}
 
