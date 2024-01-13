@@ -65,6 +65,16 @@ func main() {
 				fmt.Println("Error replacing ::set-output:", err)
 				return
 			}
+
+			// Commit changes
+			fmt.Println("Committing changes for", repoDir)
+			commitCmd := "git add . && git commit -m \"ci: Use GITHUB_OUTPUT envvar instead of set-output command\""
+			commit := exec.Command("bash", "-c", commitCmd)
+			commit.Dir = repoDir
+			if commit.Run(); err != nil {
+				fmt.Println("Error committing changes:", err)
+				return
+			}
 		}(scanner.Text())
 	}
 
