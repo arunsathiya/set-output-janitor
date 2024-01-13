@@ -84,7 +84,7 @@ func main() {
 				grepOnceMore := exec.Command("bash", "-c", grepOnceMoreCmd)
 				grepOnceMore.Dir = repoDir
 				grepOnceMoreOutput, _ := grepOnceMore.Output()
-				if grepOnceMoreOutput != nil {
+				if len(grepOnceMoreOutput) > 0 {
 					fmt.Printf("::set-output found in %s:\n%s\n", repoDir, grepOnceMoreOutput)
 				}
 
@@ -93,7 +93,7 @@ func main() {
 				grepSaveState := exec.Command("bash", "-c", grepSaveStateCmd)
 				grepSaveState.Dir = repoDir
 				grepSaveStateOutput, _ := grepSaveState.Output()
-				if grepSaveStateOutput != nil {
+				if len(grepSaveStateOutput) > 0 {
 					fmt.Printf("::save-state found in %s:\n%s\n", repoDir, grepSaveStateOutput)
 				}
 			}
