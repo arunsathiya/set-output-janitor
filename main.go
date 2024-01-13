@@ -46,8 +46,9 @@ func main() {
 			if len(prListOutput) == 0 {
 				// Check for ::set-output in cloned directory
 				fmt.Println("Checking for ::set-output in", repoDir)
-				grepCmd := "grep -rnw '" + repoDir + "' -e '::set-output'"
+				grepCmd := "grep -rnw '.' -e '::set-output'"
 				grep := exec.Command("bash", "-c", grepCmd)
+				grep.Dir = repoDir
 				if err := grep.Run(); err != nil {
 					fmt.Println("::set-output not found or error in grep:", err)
 					return
