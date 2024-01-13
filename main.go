@@ -70,6 +70,15 @@ func main() {
 					return
 				}
 
+				// Replace in print references
+				replaceInPrintReferencesCmd := `find . -type f -name '*.yml' -exec sed -i '' -E 's/print\\(f"::set-output name=(.*)::(.*)"\\)/print\\(f"\1=\2" >> $GITHUB_OUTPUT\\)/g' {} +`
+				replaceInPrintReferences := exec.Command("bash", "-c", replaceInPrintReferencesCmd)
+				replaceInPrintReferences.Dir = repoDir
+				if err := replaceInPrintReferences.Run(); err != nil {
+					fmt.Println("Error replacing ::set-output:", err)
+					return
+				}
+
 				// Commit changes
 				commitCmd := "git add . && git commit -m \"ci: Use GITHUB_OUTPUT envvar instead of set-output command\""
 				commit := exec.Command("bash", "-c", commitCmd)
