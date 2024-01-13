@@ -34,7 +34,6 @@ func main() {
 			}
 
 			// Check for existing PRs
-			fmt.Println("Checking for existing PRs in", repoDir)
 			prListCmd := "gh pr list --author \"@me\""
 			prList := exec.Command("bash", "-c", prListCmd)
 			prList.Dir = repoDir
@@ -45,7 +44,6 @@ func main() {
 			}
 			if len(prListOutput) == 0 {
 				// Check for ::set-output in cloned directory
-				fmt.Println("Checking for ::set-output in", repoDir)
 				grepCmd := "grep -rnw '.' -e '::set-output'"
 				grep := exec.Command("bash", "-c", grepCmd)
 				grep.Dir = repoDir
@@ -55,7 +53,6 @@ func main() {
 				}
 
 				// Replace ::set-output command
-				fmt.Println("Replacing ::set-output in", repoDir)
 				findReplaceCmd := "find . -type f -name '*.yml' -exec sed -i '' 's/echo \"::set-output name=\\(.*\\)::\\(.*\\)\"/echo \"\\1=\\2\" >> $GITHUB_OUTPUT/g' {} +"
 				findReplace := exec.Command("bash", "-c", findReplaceCmd)
 				findReplace.Dir = repoDir
@@ -65,7 +62,6 @@ func main() {
 				}
 
 				// One more replace run
-				fmt.Println("Second replace run for ::set-output in", repoDir)
 				secondFindReplaceCmd := "find . -type f -name '*.yml' -exec sed -i '' 's/echo ::set-output name=\\([^:]*\\)::\\(.*\\)/echo \"\\1=\\2\" >> \\$GITHUB_OUTPUT/g' {} +"
 				secondFindReplace := exec.Command("bash", "-c", secondFindReplaceCmd)
 				secondFindReplace.Dir = repoDir
@@ -75,7 +71,6 @@ func main() {
 				}
 
 				// Commit changes
-				fmt.Println("Committing changes for", repoDir)
 				commitCmd := "git add . && git commit -m \"ci: Use GITHUB_OUTPUT envvar instead of set-output command\""
 				commit := exec.Command("bash", "-c", commitCmd)
 				commit.Dir = repoDir
@@ -85,8 +80,7 @@ func main() {
 				}
 
 				// Check for ::set-output once more
-				fmt.Println("Check for ::set-output once more in", repoDir)
-				grepOnceMoreCmd := "grep -rnw '" + repoDir + "' -e '::set-output'"
+				grepOnceMoreCmd := "grep -rnw '.' -e '::set-output'"
 				grepOnceMore := exec.Command("bash", "-c", grepOnceMoreCmd)
 				grepOnceMore.Dir = repoDir
 				grepOnceMoreOutput, _ := grepOnceMore.Output()
@@ -95,8 +89,7 @@ func main() {
 				}
 
 				// Check for ::save-state in cloned directory
-				fmt.Println("Checking for ::save-state in", repoDir)
-				grepSaveStateCmd := "grep -rnw '" + repoDir + "' -e '::save-state'"
+				grepSaveStateCmd := "grep -rnw '.' -e '::save-state'"
 				grepSaveState := exec.Command("bash", "-c", grepSaveStateCmd)
 				grepSaveState.Dir = repoDir
 				grepSaveStateOutput, _ := grepSaveState.Output()
