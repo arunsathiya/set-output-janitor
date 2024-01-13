@@ -70,6 +70,15 @@ func main() {
 					return
 				}
 
+				// Replace in single quotes
+				singleQuotesFindReplaceCmd := `find . -type f -name '*.yml' -exec sed -i '' -E "s/echo '::set-output name=([^']+)::([^']*)'/echo \"\1=\2\" >> \$GITHUB_OUTPUT/g" {} +`
+				singleQuotesFindReplace := exec.Command("bash", "-c", singleQuotesFindReplaceCmd)
+				singleQuotesFindReplace.Dir = repoDir
+				if err := singleQuotesFindReplace.Run(); err != nil {
+					fmt.Println("Error replacing ::set-output:", err)
+					return
+				}
+
 				// Replace in print references
 				replaceInPrintReferencesCmd := `find . -type f -name '*.yml' -exec sed -i '' -E 's/print\\(f"::set-output name=(.*)::(.*)"\\)/print\\(f"\1=\2" >> $GITHUB_OUTPUT\\)/g' {} +`
 				replaceInPrintReferences := exec.Command("bash", "-c", replaceInPrintReferencesCmd)
