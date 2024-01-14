@@ -52,31 +52,34 @@ func main() {
 					return
 				}
 
-				// Replace ::set-output command
-				findReplaceCmd := "find . -type f -name '*.yml' -exec sed -i '' 's/echo \"::set-output name=\\(.*\\)::\\(.*\\)\"/echo \"\\1=\\2\" >> $GITHUB_OUTPUT/g' {} +"
-				findReplace := exec.Command("bash", "-c", findReplaceCmd)
-				findReplace.Dir = repoDir
-				if err := findReplace.Run(); err != nil {
-					fmt.Println("Error replacing ::set-output:", err)
-					return
-				}
+				types := []string{".yml", ".yaml"}
+				for _, ext := range types {
+					// Replace ::set-output command
+					findReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo \"::set-output name=\\(.*\\)::\\(.*\\)\"/echo \"\\1=\\2\" >> $GITHUB_OUTPUT/g' {} +", ext)
+					findReplace := exec.Command("bash", "-c", findReplaceCmd)
+					findReplace.Dir = repoDir
+					if err := findReplace.Run(); err != nil {
+						fmt.Println("Error replacing ::set-output:", err)
+						return
+					}
 
-				// One more replace run
-				secondFindReplaceCmd := "find . -type f -name '*.yml' -exec sed -i '' 's/echo ::set-output name=\\([^:]*\\)::\\(.*\\)/echo \"\\1=\\2\" >> \\$GITHUB_OUTPUT/g' {} +"
-				secondFindReplace := exec.Command("bash", "-c", secondFindReplaceCmd)
-				secondFindReplace.Dir = repoDir
-				if err := secondFindReplace.Run(); err != nil {
-					fmt.Println("Error replacing ::set-output:", err)
-					return
-				}
+					// One more replace run
+					secondFindReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo ::set-output name=\\([^:]*\\)::\\(.*\\)/echo \"\\1=\\2\" >> \\$GITHUB_OUTPUT/g' {} +", ext)
+					secondFindReplace := exec.Command("bash", "-c", secondFindReplaceCmd)
+					secondFindReplace.Dir = repoDir
+					if err := secondFindReplace.Run(); err != nil {
+						fmt.Println("Error replacing ::set-output:", err)
+						return
+					}
 
-				// Replace in single quotes
-				singleQuotesFindReplaceCmd := `find . -type f -name '*.yml' -exec sed -i '' -E "s/echo '::set-output name=([^']+)::([^']*)'/echo \"\1=\2\" >> \$GITHUB_OUTPUT/g" {} +`
-				singleQuotesFindReplace := exec.Command("bash", "-c", singleQuotesFindReplaceCmd)
-				singleQuotesFindReplace.Dir = repoDir
-				if err := singleQuotesFindReplace.Run(); err != nil {
-					fmt.Println("Error replacing ::set-output:", err)
-					return
+					// Replace in single quotes
+					singleQuotesFindReplaceCmd := fmt.Sprintf(`find . -type f -name '*%s' -exec sed -i '' -E "s/echo '::set-output name=([^']+)::([^']*)'/echo \"\1=\2\" >> \$GITHUB_OUTPUT/g" {} +`, ext)
+					singleQuotesFindReplace := exec.Command("bash", "-c", singleQuotesFindReplaceCmd)
+					singleQuotesFindReplace.Dir = repoDir
+					if err := singleQuotesFindReplace.Run(); err != nil {
+						fmt.Println("Error replacing ::set-output:", err)
+						return
+					}
 				}
 
 				// Replace in JSON files
