@@ -145,13 +145,12 @@ func main() {
 				}
 
 				// Create fork
-				fork, _, err := client.Repositories.CreateFork(ctx, repoOwner, repoName, &github.RepositoryCreateForkOptions{
+				_, _, errFork := client.Repositories.CreateFork(ctx, repoOwner, repoName, &github.RepositoryCreateForkOptions{
 					DefaultBranchOnly: true,
 				})
 				if err != nil {
-					fmt.Print(err.Error())
+					fmt.Print(errFork.Error())
 				}
-				fmt.Printf("%s", fork)
 
 				// Get branch name
 				currentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
@@ -178,7 +177,7 @@ func main() {
 
 				// Create PR to upstream
 				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `set-output` to `$GITHUB_OUTPUT`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter`"
-				pr, _, err := client.PullRequests.Create(ctx, repoOwner, repoName, &github.NewPullRequest{
+				_, _, errPr := client.PullRequests.Create(ctx, repoOwner, repoName, &github.NewPullRequest{
 					Title:               github.String("ci: Use GITHUB_OUTPUT envvar instead of set-output command"),
 					Head:                github.String(fmt.Sprintf("arunsathiya:%s", strings.TrimSpace(string(currentBranchOutput)))),
 					HeadRepo:            github.String(repoName),
@@ -187,9 +186,8 @@ func main() {
 					MaintainerCanModify: github.Bool(true),
 				})
 				if err != nil {
-					fmt.Print(err.Error())
+					fmt.Print(errPr.Error())
 				}
-				fmt.Printf("%s", pr)
 			}
 		}(scanner.Text())
 	}
