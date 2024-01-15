@@ -2,14 +2,29 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/google/go-github/v58/github"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+	token := os.Getenv("GH_AUTH_TOKEN")
+	if token == "" {
+		log.Fatalf("Unauthorized, token empty")
+	}
+	ctx := context.Background()
+	client := github.NewClient(nil).WithAuthToken(token)
 	// Open the file containing the list of repositories
 	file, err := os.Open("repos.txt")
 	if err != nil {
@@ -27,6 +42,8 @@ func main() {
 			defer wg.Done()
 			fullname := strings.Split(line, " ")[3]
 			repoDir := strings.Split(fullname, "/")[1]
+			repoOwner := strings.Split(fullname, "/")[0]
+			repoName := strings.Split(fullname, "/")[1]
 			gitClone := exec.Command("gh", "repo", "clone", fullname, repoDir)
 			if err := gitClone.Run(); err != nil {
 				fmt.Println("Error cloning repository:", err)
@@ -125,6 +142,30 @@ func main() {
 				grepSaveStateOutput, _ := grepSaveState.Output()
 				if len(grepSaveStateOutput) > 0 {
 					fmt.Printf("::save-state found in %s:\n%s\n", repoDir, grepSaveStateOutput)
+				}
+
+				client.Repositories.CreateFork(ctx, repoOwner, repoName, &github.RepositoryCreateForkOptions{
+					DefaultBranchOnly: true,
+				})
+
+				currentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+				currentBranch.Dir = repoDir
+				currentBranchOutput, _ := currentBranch.Output()
+
+				swapRemotesCmd := fmt.Sprintf("git remote rename --no-progress origin upstream && git remote add origin git@github.com:arunsathiya/%s.git", repoDir)
+				swapRemotes := exec.Command("bash", "-c", swapRemotesCmd)
+				swapRemotes.Dir = repoDir
+				if err := swapRemotes.Run(); err != nil {
+					fmt.Println("Error swapping remotes", err)
+					return
+				}
+
+				updateBranchTrackerAndPushCmd := fmt.Sprintf("git branch --unset-upstream %s && git push --set-upstream origin %s", strings.TrimSpace(string(currentBranchOutput)), strings.TrimSpace(string(currentBranchOutput)))
+				updateBranchTrackerAndPush := exec.Command("bash", "-c", updateBranchTrackerAndPushCmd)
+				updateBranchTrackerAndPush.Dir = repoDir
+				if err := updateBranchTrackerAndPush.Run(); err != nil {
+					fmt.Println("Update branch tracker and push", err)
+					return
 				}
 			}
 		}(scanner.Text())
