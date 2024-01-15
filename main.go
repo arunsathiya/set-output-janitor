@@ -144,14 +144,21 @@ func main() {
 					fmt.Printf("::save-state found in %s:\n%s\n", repoDir, grepSaveStateOutput)
 				}
 
-				client.Repositories.CreateFork(ctx, repoOwner, repoName, &github.RepositoryCreateForkOptions{
+				// Create fork
+				fork, _, err := client.Repositories.CreateFork(ctx, repoOwner, repoName, &github.RepositoryCreateForkOptions{
 					DefaultBranchOnly: true,
 				})
+				if err != nil {
+					fmt.Print(err.Error())
+				}
+				fmt.Printf("%s", fork)
 
+				// Get branch name
 				currentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 				currentBranch.Dir = repoDir
 				currentBranchOutput, _ := currentBranch.Output()
 
+				// Swap remotes: mark mine as origin and the other as upstream
 				swapRemotesCmd := fmt.Sprintf("git remote rename --no-progress origin upstream && git remote add origin git@github.com:arunsathiya/%s.git", repoDir)
 				swapRemotes := exec.Command("bash", "-c", swapRemotesCmd)
 				swapRemotes.Dir = repoDir
@@ -160,6 +167,7 @@ func main() {
 					return
 				}
 
+				// Update local main branch's tracker to origin's main, and push
 				updateBranchTrackerAndPushCmd := fmt.Sprintf("git branch --unset-upstream %s && git push --set-upstream origin %s", strings.TrimSpace(string(currentBranchOutput)), strings.TrimSpace(string(currentBranchOutput)))
 				updateBranchTrackerAndPush := exec.Command("bash", "-c", updateBranchTrackerAndPushCmd)
 				updateBranchTrackerAndPush.Dir = repoDir
@@ -167,6 +175,21 @@ func main() {
 					fmt.Println("Update branch tracker and push", err)
 					return
 				}
+
+				// Create PR to upstream
+				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `set-output` to `$GITHUB_OUTPUT`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter`"
+				pr, _, err := client.PullRequests.Create(ctx, repoOwner, repoName, &github.NewPullRequest{
+					Title:               github.String("ci: Use GITHUB_OUTPUT envvar instead of set-output command"),
+					Head:                github.String(fmt.Sprintf("arunsathiya:%s", strings.TrimSpace(string(currentBranchOutput)))),
+					HeadRepo:            github.String(repoName),
+					Base:                github.String(strings.TrimSpace(string(currentBranchOutput))),
+					Body:                github.String(prBody),
+					MaintainerCanModify: github.Bool(true),
+				})
+				if err != nil {
+					fmt.Print(err.Error())
+				}
+				fmt.Printf("%s", pr)
 			}
 		}(scanner.Text())
 	}
