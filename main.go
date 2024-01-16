@@ -7,11 +7,16 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
+	"github.com/bluekeyes/patch2pr"
 	"github.com/google/go-github/v58/github"
 	"github.com/joho/godotenv"
+	"github.com/shurcooL/githubv4"
+	"golang.org/x/oauth2"
 )
 
 func main() {
@@ -19,12 +24,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading .env file")
 	}
-	token := os.Getenv("GH_AUTH_TOKEN")
+	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		log.Fatalf("Unauthorized, token empty")
 	}
-	ctx := context.Background()
-	client := github.NewClient(nil).WithAuthToken(token)
+	src := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: os.Getenv("GITHUB_TOKEN")},
+	)
+	httpClient := oauth2.NewClient(context.Background(), src)
+	v4client := githubv4.NewClient(httpClient)
+	_ = github.NewClient(nil).WithAuthToken(token)
 	// Open the file containing the list of repositories
 	file, err := os.Open("repos.txt")
 	if err != nil {
@@ -42,7 +51,6 @@ func main() {
 			defer wg.Done()
 			fullname := strings.Split(line, " ")[3]
 			repoDir := strings.Split(fullname, "/")[1]
-			repoOwner := strings.Split(fullname, "/")[0]
 			repoName := strings.Split(fullname, "/")[1]
 			gitClone := exec.Command("gh", "repo", "clone", fullname, repoDir)
 			if err := gitClone.Run(); err != nil {
@@ -117,41 +125,6 @@ func main() {
 					return
 				}
 
-				// Commit changes
-				commitCmd := "git add . && git commit -m \"ci: Use GITHUB_OUTPUT envvar instead of set-output command\""
-				commit := exec.Command("bash", "-c", commitCmd)
-				commit.Dir = repoDir
-				if commit.Run(); err != nil {
-					fmt.Println("Error committing changes:", err)
-					return
-				}
-
-				// Check for ::set-output once more
-				grepOnceMoreCmd := "grep -rnw '.' -e '::set-output'"
-				grepOnceMore := exec.Command("bash", "-c", grepOnceMoreCmd)
-				grepOnceMore.Dir = repoDir
-				grepOnceMoreOutput, _ := grepOnceMore.Output()
-				if len(grepOnceMoreOutput) > 0 {
-					fmt.Printf("::set-output found in %s:\n%s\n", repoDir, grepOnceMoreOutput)
-				}
-
-				// Check for ::save-state in cloned directory
-				grepSaveStateCmd := "grep -rnw '.' -e '::save-state'"
-				grepSaveState := exec.Command("bash", "-c", grepSaveStateCmd)
-				grepSaveState.Dir = repoDir
-				grepSaveStateOutput, _ := grepSaveState.Output()
-				if len(grepSaveStateOutput) > 0 {
-					fmt.Printf("::save-state found in %s:\n%s\n", repoDir, grepSaveStateOutput)
-				}
-
-				// Create fork
-				_, _, errFork := client.Repositories.CreateFork(ctx, repoOwner, repoName, &github.RepositoryCreateForkOptions{
-					DefaultBranchOnly: true,
-				})
-				if err != nil {
-					fmt.Print(errFork.Error())
-				}
-
 				// Get branch name
 				currentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 				currentBranch.Dir = repoDir
@@ -166,27 +139,52 @@ func main() {
 					return
 				}
 
-				// Update local main branch's tracker to origin's main, and push
-				updateBranchTrackerAndPushCmd := fmt.Sprintf("git branch --unset-upstream %s && git push --set-upstream origin %s", strings.TrimSpace(string(currentBranchOutput)), strings.TrimSpace(string(currentBranchOutput)))
-				updateBranchTrackerAndPush := exec.Command("bash", "-c", updateBranchTrackerAndPushCmd)
-				updateBranchTrackerAndPush.Dir = repoDir
-				if err := updateBranchTrackerAndPush.Run(); err != nil {
-					fmt.Println("Update branch tracker and push", err)
+				// Update local main branch's tracker to origin's main
+				updateBranchTrackerCmd := fmt.Sprintf("git branch --unset-upstream %s", strings.TrimSpace(string(currentBranchOutput)))
+				updateBranchTracker := exec.Command("bash", "-c", updateBranchTrackerCmd)
+				updateBranchTracker.Dir = repoDir
+				if err := updateBranchTracker.Run(); err != nil {
+					fmt.Println("Update branch tracker", err)
 					return
 				}
 
-				// Create PR to upstream
-				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `set-output` to `$GITHUB_OUTPUT`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter`"
-				_, _, errPr := client.PullRequests.Create(ctx, repoOwner, repoName, &github.NewPullRequest{
-					Title:               github.String("ci: Use GITHUB_OUTPUT envvar instead of set-output command"),
-					Head:                github.String(fmt.Sprintf("arunsathiya:%s", strings.TrimSpace(string(currentBranchOutput)))),
-					HeadRepo:            github.String(repoName),
-					Base:                github.String(strings.TrimSpace(string(currentBranchOutput))),
-					Body:                github.String(prBody),
-					MaintainerCanModify: github.Bool(true),
-				})
+				generatePatchCmd := "git diff > changes.patch"
+				generatePatch := exec.Command("bash", "-c", generatePatchCmd)
+				generatePatch.Dir = repoDir
+				if err := generatePatch.Run(); err != nil {
+					fmt.Println("Error generating patch", err)
+					return
+				}
+
+				patch, err := os.Open(filepath.Join(repoDir, "changes.patch"))
 				if err != nil {
-					fmt.Print(errPr.Error())
+					log.Fatalf(err.Error())
+				}
+				files, _, err := gitdiff.Parse(patch)
+				if err != nil {
+					log.Fatal(err)
+				}
+				var query struct {
+					Repository struct {
+						ID githubv4.ID
+					} `graphql:"repository(owner: \"replit\", name: \"pyright-extended\")"`
+				}
+				err = v4client.Query(context.Background(), &query, nil)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Println(query.Repository.ID)
+				graphqlApplier := patch2pr.NewGraphQLApplier(
+					v4client,
+					patch2pr.Repository{
+						Owner: "arunsathiya",
+						Name:  repoName,
+					},
+					strings.TrimSpace(string(currentBranchOutput)),
+				)
+				for _, file := range files {
+					graphqlApplier.Apply(context.Background(), file)
 				}
 			}
 		}(scanner.Text())
