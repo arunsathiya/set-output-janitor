@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -87,7 +88,7 @@ func main() {
 			repoOwner := parts[0]
 			repoName := parts[1]
 			filePath := strings.Join(parts[2:], "/")
-			expression := fmt.Sprintf("main:%s", filePath)
+			expression := fmt.Sprintf("HEAD:%s", filePath)
 
 			// Create directories
 			dir := filepath.Join(repoName, ".github", "workflows")
@@ -115,6 +116,17 @@ func main() {
 			err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
 			if err != nil {
 				fmt.Println("Error writing file:", err)
+			}
+
+			if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
+				cmd := exec.Command("git", "init")
+				cmd.Dir = repoName
+				cmdOutput, err := cmd.CombinedOutput()
+				if err != nil {
+					log.Fatalf("git init error: %v, output: %s", err, string(cmdOutput))
+				}
+			} else {
+				fmt.Println("Git already initialized in", repoName)
 			}
 		}(scanner.Text())
 	}
