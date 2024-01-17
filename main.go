@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/bluekeyes/patch2pr"
@@ -33,7 +34,7 @@ func main() {
 	)
 	httpClient := oauth2.NewClient(context.Background(), src)
 	v4client := githubv4.NewClient(httpClient)
-	_ = github.NewClient(nil).WithAuthToken(token)
+	v3client := github.NewClient(nil).WithAuthToken(token)
 	// Open the file containing the list of repositories
 	file, err := os.Open("repos.txt")
 	if err != nil {
@@ -51,6 +52,7 @@ func main() {
 			defer wg.Done()
 			fullname := strings.Split(line, " ")[3]
 			repoDir := strings.Split(fullname, "/")[1]
+			repoOwner := strings.Split(fullname, "/")[0]
 			repoName := strings.Split(fullname, "/")[1]
 			gitClone := exec.Command("gh", "repo", "clone", fullname, repoDir)
 			if err := gitClone.Run(); err != nil {
@@ -130,21 +132,17 @@ func main() {
 				currentBranch.Dir = repoDir
 				currentBranchOutput, _ := currentBranch.Output()
 
+				// Get SHA1 at HEAD
+				sha1Head := exec.Command("git", "rev-parse", "HEAD")
+				sha1Head.Dir = repoDir
+				sha1HeadOutput, _ := sha1Head.Output()
+
 				// Swap remotes: mark mine as origin and the other as upstream
 				swapRemotesCmd := fmt.Sprintf("git remote rename --no-progress origin upstream && git remote add origin git@github.com:arunsathiya/%s.git", repoDir)
 				swapRemotes := exec.Command("bash", "-c", swapRemotesCmd)
 				swapRemotes.Dir = repoDir
 				if err := swapRemotes.Run(); err != nil {
 					fmt.Println("Error swapping remotes", err)
-					return
-				}
-
-				// Update local main branch's tracker to origin's main
-				updateBranchTrackerCmd := fmt.Sprintf("git branch --unset-upstream %s", strings.TrimSpace(string(currentBranchOutput)))
-				updateBranchTracker := exec.Command("bash", "-c", updateBranchTrackerCmd)
-				updateBranchTracker.Dir = repoDir
-				if err := updateBranchTracker.Run(); err != nil {
-					fmt.Println("Update branch tracker", err)
 					return
 				}
 
@@ -164,27 +162,56 @@ func main() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				var query struct {
-					Repository struct {
-						ID githubv4.ID
-					} `graphql:"repository(owner: \"replit\", name: \"pyright-extended\")"`
+				fork, _, _ := v3client.Repositories.Get(context.Background(), "arunsathiya", repoName)
+				if fork == nil {
+					fork, _, _ = v3client.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
+						DefaultBranchOnly: true,
+					})
 				}
-				err = v4client.Query(context.Background(), &query, nil)
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-				fmt.Println(query.Repository.ID)
 				graphqlApplier := patch2pr.NewGraphQLApplier(
 					v4client,
 					patch2pr.Repository{
 						Owner: "arunsathiya",
 						Name:  repoName,
 					},
-					strings.TrimSpace(string(currentBranchOutput)),
+					string(sha1HeadOutput),
 				)
+				if len(files) == 0 {
+					log.Fatal("No files found in the patch.")
+				}
+
 				for _, file := range files {
-					graphqlApplier.Apply(context.Background(), file)
+					err := graphqlApplier.Apply(context.Background(), file)
+					if err != nil {
+						if patch2pr.IsUnsupported(err) {
+							log.Fatalf("Unsupported operation for file %s: %v", file.NewName, err)
+						} else {
+							log.Fatalf("Error applying file %s: %v", file.NewName, err)
+						}
+					} else {
+						log.Printf("Applied file: %s", file.NewName)
+					}
+				}
+
+				sha, err := graphqlApplier.Commit(
+					context.Background(),
+					string(currentBranchOutput),
+					&gitdiff.PatchHeader{
+						Author: &gitdiff.PatchIdentity{
+							Name:  "Arun",
+							Email: "arun@arun.blog",
+						},
+						AuthorDate: time.Now(), // Replace with actual time
+						Committer: &gitdiff.PatchIdentity{
+							Name:  "Arun",
+							Email: "arun@arun.blog",
+						},
+						CommitterDate: time.Now(), // Replace with actual time
+					},
+				)
+				fmt.Printf("Commit SHA: %s", sha)
+				if err != nil {
+					log.Fatal(err)
 				}
 			}
 		}(scanner.Text())
