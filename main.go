@@ -6,19 +6,53 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/bluekeyes/go-gitdiff/gitdiff"
-	"github.com/bluekeyes/patch2pr"
-	"github.com/google/go-github/v58/github"
 	"github.com/joho/godotenv"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
 )
+
+type FileContentQuery struct {
+	Repository struct {
+		Object struct {
+			Blob struct {
+				Text githubv4.String
+			} `graphql:"... on Blob"`
+		} `graphql:"object(expression: $expression)"`
+	} `graphql:"repository(name: $name, owner: $owner)"`
+}
+
+type FileContentResponse struct {
+	Data struct {
+		Repository struct {
+			Object struct {
+				Blob struct {
+					Text string `json:"text"`
+				} `json:"blob"`
+			} `json:"object"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+func fetchFileContent(client *githubv4.Client, owner, name, expression string) (string, error) {
+	var query FileContentQuery
+	variables := map[string]interface{}{
+		"owner":      githubv4.String(owner),
+		"name":       githubv4.String(name),
+		"expression": githubv4.String(expression),
+	}
+
+	err := client.Query(context.Background(), &query, variables)
+	if err != nil {
+		return "", err
+	}
+
+	return string(query.Repository.Object.Blob.Text), nil
+}
 
 func main() {
 	err := godotenv.Load()
@@ -33,8 +67,7 @@ func main() {
 		&oauth2.Token{AccessToken: os.Getenv("GITHUB_TOKEN")},
 	)
 	httpClient := oauth2.NewClient(context.Background(), src)
-	v4client := githubv4.NewClient(httpClient)
-	v3client := github.NewClient(nil).WithAuthToken(token)
+	client := githubv4.NewClient(httpClient)
 	// Open the file containing the list of repositories
 	file, err := os.Open("repos.txt")
 	if err != nil {
@@ -50,169 +83,38 @@ func main() {
 		wg.Add(1)
 		go func(line string) {
 			defer wg.Done()
-			fullname := strings.Split(line, " ")[3]
-			repoDir := strings.Split(fullname, "/")[1]
-			repoOwner := strings.Split(fullname, "/")[0]
-			repoName := strings.Split(fullname, "/")[1]
-			gitClone := exec.Command("gh", "repo", "clone", fullname, repoDir)
-			if err := gitClone.Run(); err != nil {
-				fmt.Println("Error cloning repository:", err)
-				return
+			parts := strings.Split(line, "/")
+			repoOwner := parts[0]
+			repoName := parts[1]
+			filePath := strings.Join(parts[2:], "/")
+			expression := fmt.Sprintf("main:%s", filePath)
+
+			// Create directories
+			dir := filepath.Join(repoName, ".github", "workflows")
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				os.MkdirAll(dir, os.ModePerm)
 			}
 
-			// Check for existing PRs
-			prListCmd := "gh pr list --author \"@me\""
-			prList := exec.Command("bash", "-c", prListCmd)
-			prList.Dir = repoDir
-			prListOutput, err := prList.Output()
+			// Create file
+			fullPath := filepath.Join(repoName, filePath)
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				file, err := os.Create(fullPath)
+				if err != nil {
+					log.Fatal(err)
+				}
+				file.Close()
+			}
+
+			fileContent, err := fetchFileContent(client, repoOwner, repoName, expression)
 			if err != nil {
-				fmt.Println("Error in prList check:", err)
+				fmt.Println("Error fetching file content:", err)
 				return
 			}
-			if len(prListOutput) == 0 {
-				// Check for ::set-output in cloned directory
-				grepCmd := "grep -rnw '.' -e '::set-output'"
-				grep := exec.Command("bash", "-c", grepCmd)
-				grep.Dir = repoDir
-				if err := grep.Run(); err != nil {
-					fmt.Println("::set-output not found or error in grep:", err)
-					return
-				}
 
-				types := []string{".yml", ".yaml"}
-				for _, ext := range types {
-					// Replace ::set-output command
-					findReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo \"::set-output name=\\(.*\\)::\\(.*\\)\"/echo \"\\1=\\2\" >> $GITHUB_OUTPUT/g' {} +", ext)
-					findReplace := exec.Command("bash", "-c", findReplaceCmd)
-					findReplace.Dir = repoDir
-					if err := findReplace.Run(); err != nil {
-						fmt.Println("Error replacing ::set-output:", err)
-						return
-					}
-
-					// One more replace run
-					secondFindReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo ::set-output name=\\([^:]*\\)::\\(.*\\)/echo \"\\1=\\2\" >> \\$GITHUB_OUTPUT/g' {} +", ext)
-					secondFindReplace := exec.Command("bash", "-c", secondFindReplaceCmd)
-					secondFindReplace.Dir = repoDir
-					if err := secondFindReplace.Run(); err != nil {
-						fmt.Println("Error replacing ::set-output:", err)
-						return
-					}
-
-					// Replace in single quotes
-					singleQuotesFindReplaceCmd := fmt.Sprintf(`find . -type f -name '*%s' -exec sed -i '' -E "s/echo '::set-output name=([^']+)::([^']*)'/echo \"\1=\2\" >> \$GITHUB_OUTPUT/g" {} +`, ext)
-					singleQuotesFindReplace := exec.Command("bash", "-c", singleQuotesFindReplaceCmd)
-					singleQuotesFindReplace.Dir = repoDir
-					if err := singleQuotesFindReplace.Run(); err != nil {
-						fmt.Println("Error replacing ::set-output:", err)
-						return
-					}
-				}
-
-				// Replace in JSON files
-				jsonFindReplaceCmd := `find . -type f -name '*.json' -exec sed -i '' 's/::set-output name=\([^"]*\)::\([^"]*\)/\1=\2 >> \$GITHUB_OUTPUT/g' {} +`
-				jsonFindReplace := exec.Command("bash", "-c", jsonFindReplaceCmd)
-				jsonFindReplace.Dir = repoDir
-				if err := jsonFindReplace.Run(); err != nil {
-					fmt.Println("Error replacing ::set-output:", err)
-					return
-				}
-
-				// Replace in *sh files
-				shFindReplaceCmd := `find . -type f -name '*.sh' -exec sed -i '' 's/echo "::set-output name=\(.*\)::\(.*\)"/echo "\1=\2" >> \$GITHUB_OUTPUT/g' {} +`
-				shFindReplace := exec.Command("bash", "-c", shFindReplaceCmd)
-				shFindReplace.Dir = repoDir
-				if err := shFindReplace.Run(); err != nil {
-					fmt.Println("Error replacing ::set-output:", err)
-					return
-				}
-
-				// Get branch name
-				currentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-				currentBranch.Dir = repoDir
-				currentBranchOutput, _ := currentBranch.Output()
-
-				// Get SHA1 at HEAD
-				sha1Head := exec.Command("git", "rev-parse", "HEAD")
-				sha1Head.Dir = repoDir
-				sha1HeadOutput, _ := sha1Head.Output()
-
-				// Swap remotes: mark mine as origin and the other as upstream
-				swapRemotesCmd := fmt.Sprintf("git remote rename --no-progress origin upstream && git remote add origin git@github.com:arunsathiya/%s.git", repoDir)
-				swapRemotes := exec.Command("bash", "-c", swapRemotesCmd)
-				swapRemotes.Dir = repoDir
-				if err := swapRemotes.Run(); err != nil {
-					fmt.Println("Error swapping remotes", err)
-					return
-				}
-
-				generatePatchCmd := "git diff > changes.patch"
-				generatePatch := exec.Command("bash", "-c", generatePatchCmd)
-				generatePatch.Dir = repoDir
-				if err := generatePatch.Run(); err != nil {
-					fmt.Println("Error generating patch", err)
-					return
-				}
-
-				patch, err := os.Open(filepath.Join(repoDir, "changes.patch"))
-				if err != nil {
-					log.Fatalf(err.Error())
-				}
-				files, _, err := gitdiff.Parse(patch)
-				if err != nil {
-					log.Fatal(err)
-				}
-				fork, _, _ := v3client.Repositories.Get(context.Background(), "arunsathiya", repoName)
-				if fork == nil {
-					fork, _, _ = v3client.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
-						DefaultBranchOnly: true,
-					})
-				}
-				graphqlApplier := patch2pr.NewGraphQLApplier(
-					v4client,
-					patch2pr.Repository{
-						Owner: "arunsathiya",
-						Name:  repoName,
-					},
-					string(sha1HeadOutput),
-				)
-				if len(files) == 0 {
-					log.Fatal("No files found in the patch.")
-				}
-
-				for _, file := range files {
-					err := graphqlApplier.Apply(context.Background(), file)
-					if err != nil {
-						if patch2pr.IsUnsupported(err) {
-							log.Fatalf("Unsupported operation for file %s: %v", file.NewName, err)
-						} else {
-							log.Fatalf("Error applying file %s: %v", file.NewName, err)
-						}
-					} else {
-						log.Printf("Applied file: %s", file.NewName)
-					}
-				}
-
-				sha, err := graphqlApplier.Commit(
-					context.Background(),
-					string(currentBranchOutput),
-					&gitdiff.PatchHeader{
-						Author: &gitdiff.PatchIdentity{
-							Name:  "Arun",
-							Email: "arun@arun.blog",
-						},
-						AuthorDate: time.Now(), // Replace with actual time
-						Committer: &gitdiff.PatchIdentity{
-							Name:  "Arun",
-							Email: "arun@arun.blog",
-						},
-						CommitterDate: time.Now(), // Replace with actual time
-					},
-				)
-				fmt.Printf("Commit SHA: %s", sha)
-				if err != nil {
-					log.Fatal(err)
-				}
+			// Write the content to a file
+			err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
+			if err != nil {
+				fmt.Println("Error writing file:", err)
 			}
 		}(scanner.Text())
 	}
