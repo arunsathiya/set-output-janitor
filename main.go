@@ -77,6 +77,9 @@ func main() {
 	}
 	defer file.Close()
 
+	var initializedRepos = make(map[string]bool)
+	var mu sync.Mutex
+
 	var wg sync.WaitGroup
 	scanner := bufio.NewScanner(file)
 
@@ -90,43 +93,55 @@ func main() {
 			filePath := strings.Join(parts[2:], "/")
 			expression := fmt.Sprintf("HEAD:%s", filePath)
 
-			// Create directories
-			dir := filepath.Join(repoName, ".github", "workflows")
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				os.MkdirAll(dir, os.ModePerm)
-			}
+			repoKey := fmt.Sprintf("%s/%s", repoOwner, repoName)
+			mu.Lock()
 
-			// Create file
-			fullPath := filepath.Join(repoName, filePath)
-			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-				file, err := os.Create(fullPath)
-				if err != nil {
-					log.Fatal(err)
+			if _, exists := initializedRepos[repoKey]; !exists {
+				initializedRepos[repoKey] = true
+				mu.Unlock()
+
+				// Create directories
+				dir := filepath.Join(repoName, ".github", "workflows")
+				if _, err := os.Stat(dir); os.IsNotExist(err) {
+					os.MkdirAll(dir, os.ModePerm)
 				}
-				file.Close()
-			}
 
-			fileContent, err := fetchFileContent(client, repoOwner, repoName, expression)
-			if err != nil {
-				fmt.Println("Error fetching file content:", err)
-				return
-			}
+				// Create file
+				fullPath := filepath.Join(repoName, filePath)
+				if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+					file, err := os.Create(fullPath)
+					if err != nil {
+						log.Fatal(err)
+					}
+					file.Close()
+				}
 
-			// Write the content to a file
-			err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
-			if err != nil {
-				fmt.Println("Error writing file:", err)
-			}
-
-			if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
-				cmd := exec.Command("git", "init")
-				cmd.Dir = repoName
-				cmdOutput, err := cmd.CombinedOutput()
+				fileContent, err := fetchFileContent(client, repoOwner, repoName, expression)
 				if err != nil {
-					log.Fatalf("git init error: %v, output: %s", err, string(cmdOutput))
+					fmt.Println("Error fetching file content:", err)
+					return
+				}
+
+				// Write the content to a file
+				err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
+				if err != nil {
+					fmt.Println("Error writing file:", err)
+				}
+
+				// Git initialization
+				if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
+					cmd := exec.Command("git", "init")
+					cmd.Dir = repoName
+					cmdOutput, err := cmd.CombinedOutput()
+					if err != nil {
+						log.Fatalf("git init error: %v, output: %s", err, string(cmdOutput))
+					}
+				} else {
+					fmt.Println("Git already initialized in", repoName)
 				}
 			} else {
-				fmt.Println("Git already initialized in", repoName)
+				mu.Unlock()
+				return
 			}
 		}(scanner.Text())
 	}
