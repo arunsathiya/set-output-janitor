@@ -153,6 +153,11 @@ func main() {
 				if err := processReplacements(repoName); err != nil {
 					log.Fatal(err)
 				}
+
+				// Generate patch
+				if err := genPatch(repoName); err != nil {
+					log.Fatal(err)
+				}
 			} else {
 				mu.Unlock()
 				return
@@ -217,6 +222,16 @@ func processReplacements(repoDir string) error {
 	shFindReplace.Dir = repoDir
 	if err := shFindReplace.Run(); err != nil {
 		return fmt.Errorf("error replacing ::set-output: %s", err)
+	}
+	return nil
+}
+
+func genPatch(repoName string) error {
+	fCmd := "git diff > changes.patch && git reset --hard"
+	cmd := exec.Command("sh", "-c", fCmd)
+	cmd.Dir = repoName
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("patch creation failed: %s", err)
 	}
 	return nil
 }
