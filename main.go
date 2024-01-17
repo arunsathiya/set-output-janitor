@@ -128,9 +128,10 @@ func main() {
 					fmt.Println("Error writing file:", err)
 				}
 
-				// Git initialization
+				// Git initialization and setup remote
 				if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
-					cmd := exec.Command("git", "init")
+					fCmd := fmt.Sprintf("git init && git remote add origin git@github.com:%s/%s.git", repoOwner, repoName)
+					cmd := exec.Command("sh", "-c", fCmd)
 					cmd.Dir = repoName
 					cmdOutput, err := cmd.CombinedOutput()
 					if err != nil {
