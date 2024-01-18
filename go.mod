@@ -3,9 +3,7 @@ module github.com/arunsathiya/set-output-janitor
 go 1.21.5
 
 require (
-	github.com/bluekeyes/go-gitdiff v0.7.1 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466 // indirect
 	golang.org/x/net v0.20.0 // indirect
@@ -14,6 +12,7 @@ require (
 )
 
 require (
+	github.com/bluekeyes/go-gitdiff v0.7.1
 	github.com/bluekeyes/patch2pr v0.21.0
 	github.com/google/go-github/v58 v58.0.0
 	github.com/joho/godotenv v1.5.1

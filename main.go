@@ -211,6 +211,7 @@ func main() {
 					log.Fatal(err)
 				}
 
+				// Create commit from the patch
 				patch, err := os.Open(filepath.Join(repoName, "changes.patch"))
 				if err != nil {
 					log.Fatalf(err.Error())
@@ -242,13 +243,12 @@ func main() {
 						} else {
 							log.Fatalf("Error applying file %s: %v", file.NewName, err)
 						}
-					} else {
-						log.Printf("Applied file: %s", file.NewName)
 					}
 				}
+				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `set-output` to `$GITHUB_OUTPUT`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter"
 				sha, err := graphqlApplier.Commit(
 					context.Background(),
-					"refs/heads/patch/set-output-in-workflows",
+					"refs/heads/"+*fork.DefaultBranch,
 					&gitdiff.PatchHeader{
 						Author: &gitdiff.PatchIdentity{
 							Name:  "Arun",
@@ -260,6 +260,8 @@ func main() {
 							Email: "arun@arun.blog",
 						},
 						CommitterDate: time.Now(),
+						Title:         "ci: Use GITHUB_OUTPUT envvar instead of set-output command",
+						Body:          prBody,
 					},
 				)
 				fmt.Printf("Commit SHA: %s", sha)
