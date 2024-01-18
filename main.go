@@ -173,7 +173,7 @@ func main() {
 		}
 	}
 
-	repoOwner := "intel"
+	repoOwner := strings.Split(scannedLines[0], "/")[0]
 	scannedDirs := []fs.DirEntry{}
 	dirs, err := os.ReadDir(".")
 	if err != nil {
