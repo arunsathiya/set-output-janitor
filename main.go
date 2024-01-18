@@ -439,7 +439,7 @@ func processReplacements(repoDir string) error {
 	types := []string{".yml", ".yaml"}
 	for _, ext := range types {
 		// Replace ::set-output command
-		findReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo \"::set-output name=\\(.*\\)::\\(.*\\)\"/echo \"\\1=\\2\" >> $GITHUB_OUTPUT/g' {} +", ext)
+		findReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo \"::set-output name=\\(.*\\)::\\(.*\\)\"/echo \"\\1=\\2\" >> \"$GITHUB_OUTPUT\"/g' {} +", ext)
 		findReplace := exec.Command("bash", "-c", findReplaceCmd)
 		findReplace.Dir = repoDir
 		if err := findReplace.Run(); err != nil {
@@ -447,7 +447,7 @@ func processReplacements(repoDir string) error {
 		}
 
 		// One more replace run
-		secondFindReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo ::set-output name=\\([^:]*\\)::\\(.*\\)/echo \"\\1=\\2\" >> \\$GITHUB_OUTPUT/g' {} +", ext)
+		secondFindReplaceCmd := fmt.Sprintf("find . -type f -name '*%s' -exec sed -i '' 's/echo ::set-output name=\\([^:]*\\)::\\(.*\\)/echo \"\\1=\\2\" >> \"\\$GITHUB_OUTPUT\"/g' {} +", ext)
 		secondFindReplace := exec.Command("bash", "-c", secondFindReplaceCmd)
 		secondFindReplace.Dir = repoDir
 		if err := secondFindReplace.Run(); err != nil {
@@ -455,7 +455,7 @@ func processReplacements(repoDir string) error {
 		}
 
 		// Replace in single quotes
-		singleQuotesFindReplaceCmd := fmt.Sprintf(`find . -type f -name '*%s' -exec sed -i '' -E "s/echo '::set-output name=([^']+)::([^']*)'/echo \"\1=\2\" >> \$GITHUB_OUTPUT/g" {} +`, ext)
+		singleQuotesFindReplaceCmd := fmt.Sprintf(`find . -type f -name '*%s' -exec sed -i '' -E "s/echo '::set-output name=([^']+)::([^']*)'/echo \"\1=\2\" >> \"\$GITHUB_OUTPUT\"/g" {} +`, ext)
 		singleQuotesFindReplace := exec.Command("bash", "-c", singleQuotesFindReplaceCmd)
 		singleQuotesFindReplace.Dir = repoDir
 		if err := singleQuotesFindReplace.Run(); err != nil {
@@ -464,7 +464,7 @@ func processReplacements(repoDir string) error {
 	}
 
 	// Replace in JSON files
-	jsonFindReplaceCmd := `find . -type f -name '*.json' -exec sed -i '' 's/::set-output name=\([^"]*\)::\([^"]*\)/\1=\2 >> \$GITHUB_OUTPUT/g' {} +`
+	jsonFindReplaceCmd := `find . -type f -name '*.json' -exec sed -i '' 's/::set-output name=\([^"]*\)::\([^"]*\)/\1=\2 >> \"\$GITHUB_OUTPUT\"/g' {} +`
 	jsonFindReplace := exec.Command("bash", "-c", jsonFindReplaceCmd)
 	jsonFindReplace.Dir = repoDir
 	if err := jsonFindReplace.Run(); err != nil {
@@ -472,7 +472,7 @@ func processReplacements(repoDir string) error {
 	}
 
 	// Replace in *sh files
-	shFindReplaceCmd := `find . -type f -name '*.sh' -exec sed -i '' 's/echo "::set-output name=\(.*\)::\(.*\)"/echo "\1=\2" >> \$GITHUB_OUTPUT/g' {} +`
+	shFindReplaceCmd := `find . -type f -name '*.sh' -exec sed -i '' 's/echo "::set-output name=\(.*\)::\(.*\)"/echo "\1=\2" >> \"\$GITHUB_OUTPUT\"/g' {} +`
 	shFindReplace := exec.Command("bash", "-c", shFindReplaceCmd)
 	shFindReplace.Dir = repoDir
 	if err := shFindReplace.Run(); err != nil {
