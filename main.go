@@ -145,7 +145,7 @@ func main() {
 
 			fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
 			if fork == nil {
-				fork, _, err = clientv3.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
+				_, _, err = clientv3.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
 					DefaultBranchOnly: true,
 				})
 				if err != nil {
@@ -179,9 +179,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("error reading the root directory: %v", err)
 	}
-	for _, dir := range dirs {
-		scannedDirs = append(scannedDirs, dir)
-	}
+	scannedDirs = append(scannedDirs, dirs...)
+	gitErrChan := make(chan error, len(scannedDirs))
 	for _, scannedDir := range scannedDirs {
 		if scannedDir.IsDir() {
 			wg.Add(1)
@@ -194,7 +193,7 @@ func main() {
 					cmd.Dir = repoName
 					_, err := cmd.CombinedOutput()
 					if err != nil {
-						errChan <- err
+						gitErrChan <- err
 						return
 					}
 				}
@@ -203,9 +202,9 @@ func main() {
 	}
 	go func() {
 		wg.Wait()
-		close(errChan)
+		close(gitErrChan)
 	}()
-	for err := range errChan {
+	for err := range gitErrChan {
 		if err != nil {
 			log.Printf("git init error: %v", err)
 		}
@@ -273,7 +272,7 @@ func main() {
 				cmd := exec.Command("sh", "-c", fCmd)
 				cmd.Dir = repoName
 				if _, err := cmd.CombinedOutput(); err != nil {
-					errChan <- err
+					gitErrChan <- err
 					return
 				}
 			}(scannedDir)
@@ -281,9 +280,9 @@ func main() {
 	}
 	go func() {
 		wg.Wait()
-		close(errChan)
+		close(gitErrChan)
 	}()
-	for err := range errChan {
+	for err := range gitErrChan {
 		if err != nil {
 			log.Printf("error creating initial commit: %v", err)
 		}
