@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -96,6 +98,11 @@ func fetchOid(client *githubv4.Client, owner, name string) (string, error) {
 	return string(query.Repository.DefaultBranchRef.Target.OID), nil
 }
 
+type customError struct {
+	errType string
+	message error
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -122,7 +129,13 @@ func main() {
 	var wg sync.WaitGroup
 	scanner := bufio.NewScanner(file)
 
+	scannedLines := []string{}
 	for scanner.Scan() {
+		scannedLines = append(scannedLines, scanner.Text())
+	}
+
+	errChan := make(chan error, len(scannedLines))
+	for _, scannedLine := range scannedLines {
 		wg.Add(1)
 		go func(line string) {
 			defer wg.Done()
@@ -136,7 +149,8 @@ func main() {
 					DefaultBranchOnly: true,
 				})
 				if err != nil {
-					log.Fatalf("error creating fork: %v", err)
+					errChan <- err
+					return
 				}
 			}
 
@@ -147,40 +161,62 @@ func main() {
 			if _, err := os.Stat(dir); os.IsNotExist(err) {
 				os.MkdirAll(dir, os.ModePerm)
 			}
-		}(scanner.Text())
+		}(scannedLine)
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+	for err := range errChan {
+		if err != nil {
+			log.Printf("error: %v", err)
+		}
+	}
 
 	repoOwner := "intel"
-	files, err := os.ReadDir(".")
+	scannedDirs := []fs.DirEntry{}
+	dirs, err := os.ReadDir(".")
 	if err != nil {
 		log.Fatalf("error reading the root directory: %v", err)
 	}
-	for _, file := range files {
-		if file.IsDir() {
+	for _, dir := range dirs {
+		scannedDirs = append(scannedDirs, dir)
+	}
+	for _, scannedDir := range scannedDirs {
+		if scannedDir.IsDir() {
 			wg.Add(1)
-			go func(file os.DirEntry) {
+			go func(scannedDir fs.DirEntry) {
 				defer wg.Done()
-				repoName := file.Name()
+				repoName := scannedDir.Name()
 				if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
 					fCmd := fmt.Sprintf("git init && git remote add origin git@github.com:%s/%s.git", repoOwner, repoName)
 					cmd := exec.Command("sh", "-c", fCmd)
 					cmd.Dir = repoName
-					cmdOutput, err := cmd.CombinedOutput()
+					_, err := cmd.CombinedOutput()
 					if err != nil {
-						log.Fatalf("git init error: %v, output: %s", err, string(cmdOutput))
+						errChan <- err
+						return
 					}
 				}
-			}(file)
+			}(scannedDir)
 		}
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+	for err := range errChan {
+		if err != nil {
+			log.Printf("git init error: %v", err)
+		}
+	}
 
-	for scanner.Scan() {
+	workflowFileErrChan := make(chan customError, len(scannedLines))
+	for _, scannedLine := range scannedLines {
 		wg.Add(1)
-		go func(line string) {
+		go func(scannedLine string) {
 			defer wg.Done()
-			parts := strings.Split(line, "/")
+			parts := strings.Split(scannedLine, "/")
 			repoOwner := parts[0]
 			repoName := parts[1]
 			filePath := strings.Join(parts[2:], "/")
@@ -191,72 +227,102 @@ func main() {
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 				file, err := os.Create(fullPath)
 				if err != nil {
-					log.Fatal(err)
+					workflowFileErrChan <- customError{"create", err}
+					return
 				}
 				file.Close()
 			}
 
 			fileContent, err := fetchFileContent(client, repoOwner, repoName, expression)
 			if err != nil {
-				log.Fatalf("Error fetching file content: %v", err)
+				workflowFileErrChan <- customError{"read", err}
+				return
 			}
 
 			// Write the content to a file
 			err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
 			if err != nil {
-				log.Fatalf("error writing file: %v", err)
+				workflowFileErrChan <- customError{"write", err}
 			}
-		}(scanner.Text())
+		}(scannedLine)
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(workflowFileErrChan)
+	}()
+	for err := range workflowFileErrChan {
+		if err.message != nil {
+			switch err.errType {
+			case "create":
+				log.Printf("file creation error: %v", err.message)
+			case "fetch":
+				log.Printf("file contents fetch error: %v", err.message)
+			case "write":
+				log.Printf("write contents error: %v", err.message)
+			}
+		}
+	}
 
-	for _, file := range files {
-		if file.IsDir() {
+	for _, scannedDir := range scannedDirs {
+		if scannedDir.IsDir() {
 			wg.Add(1)
-			go func(file os.DirEntry) {
+			go func(scannedDir fs.DirEntry) {
 				defer wg.Done()
-				repoName := file.Name()
+				repoName := scannedDir.Name()
 				fCmd := "git add . && git commit -m \"taken from source\""
 				cmd := exec.Command("sh", "-c", fCmd)
 				cmd.Dir = repoName
-				if cmdOutput, err := cmd.CombinedOutput(); err != nil {
-					if !strings.Contains(string(cmdOutput), "nothing to commit") {
-						log.Fatalf("initial commit failed: %v, output: %s", err, string(cmdOutput))
-					}
+				if _, err := cmd.CombinedOutput(); err != nil {
+					errChan <- err
+					return
 				}
-			}(file)
+			}(scannedDir)
 		}
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+	for err := range errChan {
+		if err != nil {
+			log.Printf("error creating initial commit: %v", err)
+		}
+	}
 
-	for _, file := range files {
-		if file.IsDir() {
+	commitPatchErrChan := make(chan customError, len(scannedDirs))
+	for _, scannedDir := range scannedDirs {
+		if scannedDir.IsDir() {
 			wg.Add(1)
-			go func(file os.DirEntry) {
+			go func(scannedDir fs.DirEntry) {
 				defer wg.Done()
-				repoName := file.Name()
+				repoName := scannedDir.Name()
 				if err := processReplacements(repoName); err != nil {
-					log.Fatalf("replacements failed: %v", err)
+					commitPatchErrChan <- customError{"replacements", err}
+					return
 				}
 				if err := genPatch(repoName); err != nil {
-					log.Fatalf("patch generation failed: %v", err)
+					commitPatchErrChan <- customError{"generating patch", err}
+					return
 				}
-				// Create commit from the patch
 				patch, err := os.Open(filepath.Join(repoName, "changes.patch"))
 				if err != nil {
-					log.Fatalf("could not open patch file: %v", err)
+					commitPatchErrChan <- customError{"open patch", err}
+					return
 				}
 				patchFiles, _, err := gitdiff.Parse(patch)
 				if err != nil {
-					log.Fatalf("parsing patch file failed: %v", err)
+					commitPatchErrChan <- customError{"parse patch", err}
+					return
 				}
 				if len(patchFiles) == 0 {
-					log.Fatalf("no files found in the patch")
+					commitPatchErrChan <- customError{"patch files length", errors.New("patch file is empty")}
+					return
 				}
 				fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
 				oid, err := fetchOid(client, *fork.Owner.Login, *fork.Name)
 				if err != nil {
-					log.Fatalf("error getting oid: %v", err)
+					commitPatchErrChan <- customError{"oid", err}
+					return
 				}
 				graphqlApplier := patch2pr.NewGraphQLApplier(
 					client,
@@ -270,9 +336,11 @@ func main() {
 					err := graphqlApplier.Apply(context.Background(), patchFile)
 					if err != nil {
 						if patch2pr.IsUnsupported(err) {
-							log.Fatalf("unsupported operation for file %s: %v", patchFile.NewName, err)
+							commitPatchErrChan <- customError{"unsupported apply operation", err}
+							return
 						} else {
-							log.Fatalf("error applying file %s: %v", patchFile.NewName, err)
+							commitPatchErrChan <- customError{"error applying", err}
+							return
 						}
 					}
 				}
@@ -298,7 +366,8 @@ func main() {
 				)
 				fmt.Printf("Commit SHA: %s", sha)
 				if err != nil {
-					log.Fatalf("error preparing commit %v", err)
+					commitPatchErrChan <- customError{"error preparing commit", err}
+					return
 				}
 
 				time.Sleep(5 * time.Second)
@@ -318,12 +387,40 @@ func main() {
 					HeadRepo:            &headRepo,
 				})
 				if err != nil {
-					log.Fatalf("error preparing PR %v", err)
+					commitPatchErrChan <- customError{"error preparing PR", err}
+					return
 				}
-			}(file)
+			}(scannedDir)
 		}
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(commitPatchErrChan)
+	}()
+	for err := range commitPatchErrChan {
+		if err.message != nil {
+			switch err.errType {
+			case "replacements":
+				log.Printf("error processing replacements: %v", err.message)
+			case "generating patch":
+				log.Printf("error generating patch: %v", err.message)
+			case "open patch":
+				log.Printf("error opening patch: %v", err.message)
+			case "parse patch":
+				log.Printf("error parsing patch: %v", err.message)
+			case "patch files length":
+				log.Printf("error with patch files length: %v", err.message)
+			case "unsupported apply operation":
+				log.Printf("error in applying operation: %v", err.message)
+			case "error applying":
+				log.Printf("error applying: %v", err.message)
+			case "error preparing commit":
+				log.Printf("error preparing commit: %v", err.message)
+			case "error preparing PR":
+				log.Printf("error preparing PR: %v", err.message)
+			}
+		}
+	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Println("Error reading from file:", err)
