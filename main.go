@@ -119,11 +119,62 @@ func main() {
 	}
 	defer file.Close()
 
-	var initializedRepos = make(map[string]bool)
-	var mu sync.Mutex
-
 	var wg sync.WaitGroup
 	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		wg.Add(1)
+		go func(line string) {
+			defer wg.Done()
+			parts := strings.Split(line, "/")
+			repoOwner := parts[0]
+			repoName := parts[1]
+
+			fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
+			if fork == nil {
+				fork, _, err = clientv3.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
+					DefaultBranchOnly: true,
+				})
+				if err != nil {
+					log.Fatalf("error creating fork: %v", err)
+				}
+			}
+
+			time.Sleep(2 * time.Second)
+
+			// Create directories
+			dir := filepath.Join(repoName, ".github", "workflows")
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				os.MkdirAll(dir, os.ModePerm)
+			}
+		}(scanner.Text())
+	}
+	wg.Wait()
+
+	repoOwner := "intel"
+	files, err := os.ReadDir(".")
+	if err != nil {
+		log.Fatalf("error reading the root directory: %v", err)
+	}
+	for _, file := range files {
+		if file.IsDir() {
+			wg.Add(1)
+			go func(file os.DirEntry) {
+				defer wg.Done()
+				repoName := file.Name()
+				if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
+					fCmd := fmt.Sprintf("git init && git remote add origin git@github.com:%s/%s.git", repoOwner, repoName)
+					cmd := exec.Command("sh", "-c", fCmd)
+					cmd.Dir = repoName
+					cmdOutput, err := cmd.CombinedOutput()
+					if err != nil {
+						log.Fatalf("git init error: %v, output: %s", err, string(cmdOutput))
+					}
+				}
+			}(file)
+		}
+	}
+	wg.Wait()
 
 	for scanner.Scan() {
 		wg.Add(1)
@@ -135,96 +186,74 @@ func main() {
 			filePath := strings.Join(parts[2:], "/")
 			expression := fmt.Sprintf("HEAD:%s", filePath)
 
-			repoKey := fmt.Sprintf("%s/%s", repoOwner, repoName)
-			mu.Lock()
-
-			if _, exists := initializedRepos[repoKey]; !exists {
-				initializedRepos[repoKey] = true
-				mu.Unlock()
-
-				fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
-				if fork == nil {
-					fork, _, err = clientv3.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
-						DefaultBranchOnly: true,
-					})
-					if err != nil {
-						log.Fatalf("Error creating fork: %v", err)
-					}
-				}
-
-				time.Sleep(5 * time.Second)
-
-				// Create directories
-				dir := filepath.Join(repoName, ".github", "workflows")
-				if _, err := os.Stat(dir); os.IsNotExist(err) {
-					os.MkdirAll(dir, os.ModePerm)
-				}
-
-				// Create file
-				fullPath := filepath.Join(repoName, filePath)
-				if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-					file, err := os.Create(fullPath)
-					if err != nil {
-						log.Fatal(err)
-					}
-					file.Close()
-				}
-
-				fileContent, err := fetchFileContent(client, repoOwner, repoName, expression)
+			// Create file
+			fullPath := filepath.Join(repoName, filePath)
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				file, err := os.Create(fullPath)
 				if err != nil {
-					fmt.Println("Error fetching file content:", err)
-					return
+					log.Fatal(err)
 				}
+				file.Close()
+			}
 
-				// Write the content to a file
-				err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
-				if err != nil {
-					fmt.Println("Error writing file:", err)
-				}
+			fileContent, err := fetchFileContent(client, repoOwner, repoName, expression)
+			if err != nil {
+				log.Fatalf("Error fetching file content: %v", err)
+			}
 
-				// Git initialization and setup remote
-				if _, err := os.Stat(filepath.Join(repoName, ".git")); os.IsNotExist(err) {
-					fCmd := fmt.Sprintf("git init && git remote add origin git@github.com:%s/%s.git", repoOwner, repoName)
-					cmd := exec.Command("sh", "-c", fCmd)
-					cmd.Dir = repoName
-					cmdOutput, err := cmd.CombinedOutput()
-					if err != nil {
-						log.Fatalf("git init error: %v, output: %s", err, string(cmdOutput))
-					}
-				} else {
-					fmt.Println("Git already initialized in", repoName)
-				}
+			// Write the content to a file
+			err = os.WriteFile(path.Join(repoName, filePath), []byte(fileContent), 0644)
+			if err != nil {
+				log.Fatalf("error writing file: %v", err)
+			}
+		}(scanner.Text())
+	}
+	wg.Wait()
 
-				// Initial commit
+	for _, file := range files {
+		if file.IsDir() {
+			wg.Add(1)
+			go func(file os.DirEntry) {
+				defer wg.Done()
+				repoName := file.Name()
 				fCmd := "git add . && git commit -m \"taken from source\""
 				cmd := exec.Command("sh", "-c", fCmd)
 				cmd.Dir = repoName
-				if err := cmd.Run(); err != nil {
-					log.Fatal(err)
+				if cmdOutput, err := cmd.CombinedOutput(); err != nil {
+					if !strings.Contains(string(cmdOutput), "nothing to commit") {
+						log.Fatalf("initial commit failed: %v, output: %s", err, string(cmdOutput))
+					}
 				}
+			}(file)
+		}
+	}
+	wg.Wait()
 
-				// Replace output
+	for _, file := range files {
+		if file.IsDir() {
+			wg.Add(1)
+			go func(file os.DirEntry) {
+				defer wg.Done()
+				repoName := file.Name()
 				if err := processReplacements(repoName); err != nil {
-					log.Fatal(err)
+					log.Fatalf("replacements failed: %v", err)
 				}
-
-				// Generate patch
 				if err := genPatch(repoName); err != nil {
-					log.Fatal(err)
+					log.Fatalf("patch generation failed: %v", err)
 				}
-
 				// Create commit from the patch
 				patch, err := os.Open(filepath.Join(repoName, "changes.patch"))
 				if err != nil {
-					log.Fatalf(err.Error())
+					log.Fatalf("could not open patch file: %v", err)
 				}
-				files, _, err := gitdiff.Parse(patch)
+				patchFiles, _, err := gitdiff.Parse(patch)
 				if err != nil {
-					log.Fatal(err)
+					log.Fatalf("parsing patch file failed: %v", err)
 				}
-				if len(files) == 0 {
-					log.Fatal("No files found in the patch.")
+				if len(patchFiles) == 0 {
+					log.Fatalf("no files found in the patch")
 				}
+				fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
 				oid, err := fetchOid(client, *fork.Owner.Login, *fork.Name)
 				if err != nil {
 					log.Fatalf("error getting oid: %v", err)
@@ -237,13 +266,13 @@ func main() {
 					},
 					oid,
 				)
-				for _, file := range files {
-					err := graphqlApplier.Apply(context.Background(), file)
+				for _, patchFile := range patchFiles {
+					err := graphqlApplier.Apply(context.Background(), patchFile)
 					if err != nil {
 						if patch2pr.IsUnsupported(err) {
-							log.Fatalf("Unsupported operation for file %s: %v", file.NewName, err)
+							log.Fatalf("unsupported operation for file %s: %v", patchFile.NewName, err)
 						} else {
-							log.Fatalf("Error applying file %s: %v", file.NewName, err)
+							log.Fatalf("error applying file %s: %v", patchFile.NewName, err)
 						}
 					}
 				}
@@ -291,13 +320,9 @@ func main() {
 				if err != nil {
 					log.Fatalf("error preparing PR %v", err)
 				}
-			} else {
-				mu.Unlock()
-				return
-			}
-		}(scanner.Text())
+			}(file)
+		}
 	}
-
 	wg.Wait()
 
 	if err := scanner.Err(); err != nil {
