@@ -364,7 +364,7 @@ func main() {
 						Body:          prBody,
 					},
 				)
-				fmt.Printf("Commit SHA: %s", sha)
+				fmt.Printf("Commit SHA: %s\n", sha)
 				if err != nil {
 					commitPatchErrChan <- customError{"error preparing commit", err}
 					return
