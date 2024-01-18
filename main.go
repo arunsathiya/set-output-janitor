@@ -262,6 +262,7 @@ func main() {
 		}
 	}
 
+	commitErrChan := make(chan error, len(scannedDirs))
 	for _, scannedDir := range scannedDirs {
 		if scannedDir.IsDir() {
 			wg.Add(1)
@@ -280,9 +281,9 @@ func main() {
 	}
 	go func() {
 		wg.Wait()
-		close(gitErrChan)
+		close(commitErrChan)
 	}()
-	for err := range gitErrChan {
+	for err := range commitErrChan {
 		if err != nil {
 			log.Printf("error creating initial commit: %v", err)
 		}
