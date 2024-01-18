@@ -11,7 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
+	"github.com/bluekeyes/patch2pr"
+	"github.com/google/go-github/v58/github"
 	"github.com/joho/godotenv"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
@@ -55,6 +59,43 @@ func fetchFileContent(client *githubv4.Client, owner, name, expression string) (
 	return string(query.Repository.Object.Blob.Text), nil
 }
 
+type OidQuery struct {
+	Repository struct {
+		DefaultBranchRef struct {
+			Target struct {
+				OID githubv4.String
+			} `graphql:"target"`
+		} `graphql:"defaultBranchRef"`
+	} `graphql:"repository(owner: $owner, name: $name)"`
+}
+
+type OidResponse struct {
+	Data struct {
+		Repository struct {
+			DefaultBranchRef struct {
+				Target struct {
+					OID string `json:"oid"`
+				} `json:"target"`
+			} `json:"defaultBranchRef"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+func fetchOid(client *githubv4.Client, owner, name string) (string, error) {
+	var query OidQuery
+	variables := map[string]interface{}{
+		"owner": githubv4.String(owner),
+		"name":  githubv4.String(name),
+	}
+
+	err := client.Query(context.Background(), &query, variables)
+	if err != nil {
+		return "", err
+	}
+
+	return string(query.Repository.DefaultBranchRef.Target.OID), nil
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -69,6 +110,7 @@ func main() {
 	)
 	httpClient := oauth2.NewClient(context.Background(), src)
 	client := githubv4.NewClient(httpClient)
+	clientv3 := github.NewClient(nil).WithAuthToken(token)
 	// Open the file containing the list of repositories
 	file, err := os.Open("repos.txt")
 	if err != nil {
@@ -99,6 +141,16 @@ func main() {
 			if _, exists := initializedRepos[repoKey]; !exists {
 				initializedRepos[repoKey] = true
 				mu.Unlock()
+
+				fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
+				if fork == nil {
+					fork, _, err = clientv3.Repositories.CreateFork(context.Background(), repoOwner, repoName, &github.RepositoryCreateForkOptions{
+						DefaultBranchOnly: true,
+					})
+					if err != nil {
+						log.Fatalf("Error creating fork: %v", err)
+					}
+				}
 
 				// Create directories
 				dir := filepath.Join(repoName, ".github", "workflows")
@@ -157,6 +209,62 @@ func main() {
 				// Generate patch
 				if err := genPatch(repoName); err != nil {
 					log.Fatal(err)
+				}
+
+				patch, err := os.Open(filepath.Join(repoName, "changes.patch"))
+				if err != nil {
+					log.Fatalf(err.Error())
+				}
+				files, _, err := gitdiff.Parse(patch)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if len(files) == 0 {
+					log.Fatal("No files found in the patch.")
+				}
+				oid, err := fetchOid(client, *fork.Owner.Login, *fork.Name)
+				if err != nil {
+					log.Fatalf("error getting oid: %v", err)
+				}
+				graphqlApplier := patch2pr.NewGraphQLApplier(
+					client,
+					patch2pr.Repository{
+						Owner: *fork.Owner.Login,
+						Name:  *fork.Name,
+					},
+					oid,
+				)
+				for _, file := range files {
+					err := graphqlApplier.Apply(context.Background(), file)
+					if err != nil {
+						if patch2pr.IsUnsupported(err) {
+							log.Fatalf("Unsupported operation for file %s: %v", file.NewName, err)
+						} else {
+							log.Fatalf("Error applying file %s: %v", file.NewName, err)
+						}
+					} else {
+						log.Printf("Applied file: %s", file.NewName)
+					}
+				}
+				sha, err := graphqlApplier.Commit(
+					context.Background(),
+					"refs/heads/patch/set-output-in-workflows",
+					&gitdiff.PatchHeader{
+						Author: &gitdiff.PatchIdentity{
+							Name:  "Arun",
+							Email: "arun@arun.blog",
+						},
+						AuthorDate: time.Now(),
+						Committer: &gitdiff.PatchIdentity{
+							Name:  "Arun",
+							Email: "arun@arun.blog",
+						},
+						CommitterDate: time.Now(),
+					},
+				)
+				fmt.Printf("Commit SHA: %s", sha)
+				if err != nil {
+					log.Fatalf("Error preparing commit %v", err)
 				}
 			} else {
 				mu.Unlock()
