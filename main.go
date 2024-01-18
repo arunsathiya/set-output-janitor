@@ -152,6 +152,8 @@ func main() {
 					}
 				}
 
+				time.Sleep(5 * time.Second)
+
 				// Create directories
 				dir := filepath.Join(repoName, ".github", "workflows")
 				if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -245,6 +247,7 @@ func main() {
 						}
 					}
 				}
+				prTitle := "ci: Use GITHUB_OUTPUT envvar instead of set-output command"
 				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `set-output` to `$GITHUB_OUTPUT`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter"
 				sha, err := graphqlApplier.Commit(
 					context.Background(),
@@ -260,13 +263,33 @@ func main() {
 							Email: "arun@arun.blog",
 						},
 						CommitterDate: time.Now(),
-						Title:         "ci: Use GITHUB_OUTPUT envvar instead of set-output command",
+						Title:         prTitle,
 						Body:          prBody,
 					},
 				)
 				fmt.Printf("Commit SHA: %s", sha)
 				if err != nil {
-					log.Fatalf("Error preparing commit %v", err)
+					log.Fatalf("error preparing commit %v", err)
+				}
+
+				time.Sleep(5 * time.Second)
+
+				var maintainerCanModify bool = true
+				var draft bool = false
+				var base string = *fork.Source.DefaultBranch
+				var head string = *fork.Owner.Login + ":" + *fork.DefaultBranch
+				var headRepo string = *fork.Name
+				_, _, err = clientv3.PullRequests.Create(context.Background(), repoOwner, repoName, &github.NewPullRequest{
+					Title:               &prTitle,
+					Body:                &prBody,
+					MaintainerCanModify: &maintainerCanModify,
+					Draft:               &draft,
+					Base:                &base,
+					Head:                &head,
+					HeadRepo:            &headRepo,
+				})
+				if err != nil {
+					log.Fatalf("error preparing PR %v", err)
 				}
 			} else {
 				mu.Unlock()
