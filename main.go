@@ -361,7 +361,7 @@ func main() {
 						},
 						CommitterDate: time.Now(),
 						Title:         prTitle,
-						Body:          prBody,
+						Body:          prBody + "\n\nSigned-off-by: Arun <arun@arun.blog>",
 					},
 				)
 				fmt.Printf("Commit SHA: %s\n", sha)
