@@ -364,14 +364,12 @@ func main() {
 						Body:          prBody,
 					},
 				)
-				fmt.Printf("Commit SHA: %s\n", sha)
+				fmt.Printf("Commit SHA for %s: %s\n", repoName, sha)
 				if err != nil {
 					commitPatchErrChan <- customError{"error preparing commit", err}
 					return
 				}
-
 				time.Sleep(5 * time.Second)
-
 				var maintainerCanModify bool = true
 				var draft bool = false
 				var base string = *fork.Source.DefaultBranch
