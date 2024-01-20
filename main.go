@@ -314,6 +314,7 @@ func main() {
 					commitPatchErrChan <- customError{"parse patch", err}
 					return
 				}
+				time.Sleep(2 * time.Second)
 				if len(patchFiles) == 0 {
 					commitPatchErrChan <- customError{"patch files length", errors.New("patch file is empty")}
 					return
