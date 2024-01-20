@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -182,7 +181,7 @@ func main() {
 	scannedDirs = append(scannedDirs, dirs...)
 	gitErrChan := make(chan error, len(scannedDirs))
 	for _, scannedDir := range scannedDirs {
-		if scannedDir.IsDir() {
+		if scannedDir.IsDir() && scannedDir.Name() != ".git" {
 			wg.Add(1)
 			go func(scannedDir fs.DirEntry) {
 				defer wg.Done()
@@ -264,7 +263,7 @@ func main() {
 
 	commitErrChan := make(chan error, len(scannedDirs))
 	for _, scannedDir := range scannedDirs {
-		if scannedDir.IsDir() {
+		if scannedDir.IsDir() && scannedDir.Name() != ".git" {
 			wg.Add(1)
 			go func(scannedDir fs.DirEntry) {
 				defer wg.Done()
@@ -291,7 +290,7 @@ func main() {
 
 	commitPatchErrChan := make(chan customError, len(scannedDirs))
 	for _, scannedDir := range scannedDirs {
-		if scannedDir.IsDir() {
+		if scannedDir.IsDir() && scannedDir.Name() != ".git" {
 			wg.Add(1)
 			go func(scannedDir fs.DirEntry) {
 				defer wg.Done()
@@ -314,9 +313,8 @@ func main() {
 					commitPatchErrChan <- customError{"parse patch", err}
 					return
 				}
-				time.Sleep(2 * time.Second)
 				if len(patchFiles) == 0 {
-					commitPatchErrChan <- customError{"patch files length", errors.New("patch file is empty")}
+					commitPatchErrChan <- customError{"patch files length", fmt.Errorf("patch is empty for %s", repoName)}
 					return
 				}
 				fork, _, _ := clientv3.Repositories.Get(context.Background(), "arunsathiya", repoName)
@@ -370,7 +368,7 @@ func main() {
 					commitPatchErrChan <- customError{"error preparing commit", err}
 					return
 				}
-				time.Sleep(5 * time.Second)
+				time.Sleep(2 * time.Second)
 				var maintainerCanModify bool = true
 				var draft bool = false
 				var base string = *fork.Source.DefaultBranch
