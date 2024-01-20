@@ -345,7 +345,7 @@ func main() {
 					}
 				}
 				prTitle := "ci: Use GITHUB_OUTPUT envvar instead of set-output command"
-				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `set-output` to `$GITHUB_OUTPUT`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter"
+				prBody := "`save-state` and `set-output` commands used in GitHub Actions are deprecated and [GitHub recommends using environment files](https://github.blog/changelog/2023-07-24-github-actions-update-on-save-state-and-set-output-commands/).\n\nThis PR updates the usage of `::set-output` to `\"$GITHUB_OUTPUT\"`\n\nInstructions for envvar usage from GitHub docs:\n\nhttps://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-output-parameter"
 				sha, err := graphqlApplier.Commit(
 					context.Background(),
 					"refs/heads/"+*fork.DefaultBranch,
@@ -361,7 +361,7 @@ func main() {
 						},
 						CommitterDate: time.Now(),
 						Title:         prTitle,
-						Body:          prBody + "\n\nSigned-off-by: Arun <arun@arun.blog>",
+						Body:          prBody,
 					},
 				)
 				fmt.Printf("Commit SHA: %s\n", sha)
