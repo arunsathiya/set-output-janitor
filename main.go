@@ -419,6 +419,42 @@ func main() {
 		}
 	}
 
+	replaceFilesErrChan := make(chan customError, len(scannedLines))
+	for _, scannedLine := range scannedLines {
+		wg.Add(1)
+		go func(scannedLine string) {
+			defer wg.Done()
+			parts := strings.Split(scannedLine, "/")
+			repoName := parts[1]
+			filePath := strings.Join(parts[2:], "/")
+			expression := fmt.Sprintf("HEAD:%s", filePath)
+			fileContent, err := fetchFileContent(client, "arunsathiya", repoName, expression)
+			if err != nil {
+				replaceFilesErrChan <- customError{"read", err}
+				return
+			}
+			fullPath := filepath.Join(repoName, filePath)
+			err = os.WriteFile(fullPath, []byte(fileContent), os.ModePerm)
+			if err != nil {
+				replaceFilesErrChan <- customError{"write", err}
+			}
+		}(scannedLine)
+	}
+	go func() {
+		wg.Wait()
+		close(replaceFilesErrChan)
+	}()
+	for err := range replaceFilesErrChan {
+		if err.message != nil {
+			switch err.errType {
+			case "read":
+				log.Printf("read from origin error: %v", err.message)
+			case "write":
+				log.Printf("write origin content error: %v", err.message)
+			}
+		}
+	}
+
 	if err := scanner.Err(); err != nil {
 		fmt.Println("Error reading from file:", err)
 	}
